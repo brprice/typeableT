@@ -3,7 +3,7 @@
 -- An implementation of serialisable closures, to enable distributed programming.
 
 {-# LANGUAGE Safe #-}
-{-# LANGUAGE GADTs , FlexibleInstances #-}
+{-# LANGUAGE GADTs , FlexibleInstances , TypeFamilies #-}
 
 module Control.DistributedClosure (Closure()
                                   ,unclosure
@@ -17,22 +17,39 @@ module Control.DistributedClosure (Closure()
                                   ,getSDynClosure
                                   ,getClosure
                                   ,Serializable(..)
+                                  ,closureRemoteTable
                                   ) where
 
-import safe Data.Binary(Binary(put,get),Put(),Get(),encode,putWord8,getWord8)
+import safe Data.Binary(Binary(put,get),Put(),Get(),decode,encode,putWord8,getWord8)
 import safe Data.ByteString.Lazy(ByteString())
 
-import safe Data.TypeableT(TypeRep(),Typeable(typeRep),G2(G2),getFnR,gcastR)
+import safe Data.TypeableT(TypeRep(),unsafeTemporaryMkTypeRep,Typeable(typeRep),G2(G2),getFnR,gcastR)
 import safe Data.DynamicT(SDynamic(SDynamic))
-import safe Data.StaticPtr (Dict()
+import safe Data.StaticPtr (Dict(Dict),Tag(PolyTag,typeableConstraint),PolyTblEnt(PolyTblEnt)
+                           ,RemoteTable,initRemoteTable
+                           ,registerStaticPoly,staticPolyPtrAt
                            ,StaticPtr(),deRefStaticPtr,putStaticPtr,getSDynStaticPtr
-                           ,Static(),staticMono,staticApp,deRefStatic,putStatic,getSDynStatic
-                           ,staticDBBool,staticDBInt
-                           ,staticDTBool,staticDTInt
-                           ,sExtractDecode
-                           ,sMaybeDB,sMaybeDT
-                           ,sListDB,sListDT
+                           ,Static(),staticApp,deRefStatic,putStatic,getSDynStatic
                            )
+
+
+-- | A minimal remote table containing just what closures require
+closureRemoteTable :: RemoteTable
+closureRemoteTable = registerStaticPoly "extractDecode" (PolyTblEnt ExtractDecodeTag (\_ Dict -> decode))
+                     $ initRemoteTable
+
+typeRepBinary :: TypeRep Binary
+typeRepBinary = unsafeTemporaryMkTypeRep ("binar_EKE3c9Lmxb3DQpU0fPtru6","Data.Binary.Class","Get")
+instance Typeable Binary where
+  typeRep = typeRepBinary
+
+data ExtractDecodeTag = ExtractDecodeTag deriving Show
+instance Tag ExtractDecodeTag where
+  type PolyTag ExtractDecodeTag a = Dict (Binary a) -> ByteString -> a
+  typeableConstraint _ Dict = Dict
+sExtractDecode :: Static (Dict (Typeable a)) -> Static (PolyTag ExtractDecodeTag a)
+sExtractDecode = staticPolyPtrAt closureRemoteTable ExtractDecodeTag "extractDecode"
+
 
 -- | Abstract type representing closures.
 -- See 'closureSP', 'closureS', 'closureEnc' and 'closureApp' for smart constructors, and also 'closurePure'.
@@ -107,36 +124,31 @@ maybeToGet err Nothing = fail err
 maybeToGet _ (Just x) = return x
 
 -- | Deserialise a 'Closure' to a 'SDynamic' value, without having to know the type.
-getSDynClosure :: Get (SDynamic Closure)
-getSDynClosure = getWord8 >>= go
-  where go 0 = do SDynamic tsp sp <- getSDynStaticPtr  -- StaticPtr case
+getSDynClosure :: RemoteTable -> Get (SDynamic Closure)
+getSDynClosure rt = getWord8 >>= go
+  where go 0 = do SDynamic tsp sp <- getSDynStaticPtr rt -- StaticPtr case
                   return $ SDynamic tsp $ closureSP sp
-        go 1 = do SDynamic tsp s <- getSDynStatic -- Static case
+        go 1 = do SDynamic tsp s <- getSDynStatic rt -- Static case
                   return $ SDynamic tsp $ closureS s
         go 2 = do bs <- get -- Encoded case
                   return $ SDynamic typeRep $ Encoded bs
-        go 3 = do SDynamic tf cf <- getSDynClosure -- App case
+        go 3 = do SDynamic tf cf <- getSDynClosure rt -- App case
                   G2 src tgt <- maybeToGet "getSDynClosure - App ctor not applied to a function" $ getFnR tf
-                  SDynamic ta ca <- getSDynClosure
+                  SDynamic ta ca <- getSDynClosure rt
                   ca' <- maybeToGet "getSDynClosure - App function input and argument type mismatch" $ gcastR ta src ca
                   return $ SDynamic tgt $ closureApp cf ca'
         go _ = fail "getSDynClosure: bad encoding"
 
 -- | Deserialise a 'Closure'. See also 'encode' (default definition in terms of 'getClosure') from the 'Binary' instance of 'Closure'
-getClosure :: TypeRep a -- ^ The type to deserialise at
+getClosure :: RemoteTable -> TypeRep a -- ^ The type to deserialise at
            -> Get (Closure a)
-getClosure t = do SDynamic tc c <- getSDynClosure
-                  maybeToGet ("getClosure: dynamic typecheck failed (had "
-                              ++ show t ++ " and " ++ show tc ++ ")")
-                    $ gcastR tc t c
+getClosure rt t = do SDynamic tc c <- getSDynClosure rt
+                     maybeToGet ("getClosure: dynamic typecheck failed (had "
+                                 ++ show t ++ " and " ++ show tc ++ ")")
+                       $ gcastR tc t c
 
-instance Binary (SDynamic Closure) where
-  put = putSDynClosure
-  get = getSDynClosure
-
-instance Typeable a => Binary (Closure a) where
-  put = putClosure
-  get = getClosure typeRep
+-- We can't provide Binary instances, as need to differ depending on RemoteTable.
+-- We force users to provide (orphan) instances
 
 -- | A class for those types for which we have /static/ evidence of their 'Binary' and 'Typeable'
 -- nature, and so can serialise them (via 'closurePure')
@@ -148,29 +160,3 @@ class (Binary a, Typeable a) => Serializable a where
 -- | Any serialisable value can be considered a 'Closure'
 closurePure :: Serializable a => a -> Closure a
 closurePure a = closureApp (closureS $ sExtractDecode typDict `staticApp` binDict) $ closureEnc (encode a)
-
-instance Serializable Bool where
-  binDict = staticMono staticDBBool
-  typDict = staticMono staticDTBool
-
-instance Serializable Int where
-  binDict = staticMono staticDBInt
-  typDict = staticMono staticDTInt
-
-{-
-Could make a staticDBMaybeInt and staticDTMaybeInt and do
-
-instance Serializable (Maybe Int) where
-  binDict = MonoPtr staticDBMaybeInt
-  typDict = MonoPtr staticDTMaybeInt
-
-or, in general:
--}
-
-instance Serializable b => Serializable (Maybe b) where
-  binDict = sMaybeDB typDict `staticApp` binDict
-  typDict = sMaybeDT typDict
-
-instance Serializable b => Serializable [b] where
-  binDict = sListDB typDict `staticApp` binDict
-  typDict = sListDT typDict

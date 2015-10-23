@@ -3,10 +3,18 @@
 -- Support for static pointers: pointers to values that are known at compile time.
 
 {-# LANGUAGE Safe #-}
-{-# LANGUAGE GADTs , FlexibleInstances #-}
+{-# LANGUAGE GADTs , FlexibleInstances , ScopedTypeVariables #-}
 
 module Data.StaticPtr (Dict(Dict)
                       ,StaticPtr()
+                      ,RemoteTable()
+                      ,initRemoteTable
+                      ,registerStaticMono
+                      ,staticMonoPtr
+                      ,Tag(PolyTag,typeableConstraint)
+                      ,PolyTblEnt(PolyTblEnt)
+                      ,registerStaticPoly
+                      ,staticPolyPtrAt
                       ,deRefStaticPtr
                       ,putSDynStaticPtr
                       ,putStaticPtr
@@ -20,33 +28,57 @@ module Data.StaticPtr (Dict(Dict)
                       ,putStatic
                       ,getSDynStatic
                       ,getStatic
-                      ,staticNot
-                      ,staticTrue
-                      ,staticBsNot
-                      ,staticDecBool
-                      ,staticDecInt
-                      ,staticSucc
-                      ,staticAdd
-                      ,staticPredBS
-                      ,staticDBBool
-                      ,staticDBInt
-                      ,staticDTBool
-                      ,staticDTInt
-                      ,sExtractDecode
-                      ,sMaybeDB
-                      ,sMaybeDT
-                      ,sListDB
-                      ,sListDT
-                      ,sReverse
                       ) where
 
 import safe Data.Binary(Binary(put,get),Put(),Get(),putWord8,getWord8)
+import qualified Data.Map as M (insert,lookup)
 
 import safe Data.TypeableT(TypeRep(),Typeable(typeRep),G1(G1),getR1,G2(G2),getFnR,gcastR)
-import safe Data.DynamicT(SDynamic(SDynamic))
+import safe Data.DynamicT(Dynamic(Dynamic),SDynamic(SDynamic))
 
 import safe Data.StaticPtr.Internals
 import safe Data.StaticPtr.SPT
+
+newtype RemoteTable = RT (StaticPtrTable,PolyPtrTable)
+
+initRemoteTable :: RemoteTable
+initRemoteTable = RT (initStaticMonoTable,initStaticPolyTable)
+
+-- | Add a monomorphic static pointer to the table
+registerStaticMono :: String -> Dynamic -> RemoteTable -> RemoteTable
+registerStaticMono name val (RT (SPT spt,ppt)) = RT (SPT $ M.insert name val spt,ppt)
+
+-- | Add a polymorphic static polymorphic to the table
+registerStaticPoly :: String -> PolyTblEnt -> RemoteTable -> RemoteTable
+registerStaticPoly name val (RT (spt,PPT ppt)) = RT (spt,PPT $ M.insert name val ppt)
+
+-- | Extract a monomorphic 'Static' from the table.
+-- This may call 'error', and is only intended to be used in the following pattern
+--
+-- > rtable = registerStaticMono "true" (toDyn True) initRemoteTable
+-- > staticTrue = staticMonoPtr rtable "true"
+staticMonoPtr :: forall a . Typeable a => RemoteTable -> String -> Static a
+staticMonoPtr rtable n = case lookupSPT rtable n of
+                           Just (SDynamic t v) -> case gcastR t (typeRep :: TypeRep a) (staticMono v) of
+                                                    Just p -> p
+                                                    Nothing -> error $ "bad type on label: " ++ n
+                           _ -> error $ "bad label: " ++ n
+
+-- | Extract a polymorphic 'Static' from the table.
+-- This may call 'error', and is only intended to be used in the following pattern
+--
+-- > rtable = registerStaticPoly "id" (PolyTblEnt IdTag (\_ -> id)) initRemoteTable
+-- > staticId = staticPolyPtrAt rtable IdTag "id"
+--
+-- (where IdTag is a suitable type with a suitable 'PolyTag' instance)
+staticPolyPtrAt :: forall tag a . Tag tag => RemoteTable -> tag -> String -> Static (Dict (Typeable a)) -> Static (PolyTag tag a)
+staticPolyPtrAt rtable tag n typ = case lookupPPT rtable n typ of
+                                     Just (SDynamic t v) -> case gcastR t ta v of
+                                                              Just p -> p
+                                                              Nothing -> error $ "bad type on label: " ++ n
+                                     _ -> error $ "bad label: " ++ n
+    where ta :: TypeRep (PolyTag tag a)
+          ta = (\Dict -> typeRep) $ typeableConstraint tag (deRefStatic typ)
 
 --I don't want to export the PolyPtr ctor, so for consistency, I've exported functions and not ctors for the other two
 -- | Smart constructor for 'Static'
@@ -67,31 +99,16 @@ deRefStatic (MonoPtr p) = deRefStaticPtr p
 deRefStatic (PolyPtr _ _ targ a) = a (deRefStatic targ)
 deRefStatic (StaticApp f x) = deRefStatic f (deRefStatic x)
 
-lookupSPT :: StaticName -> Maybe (SDynamic StaticPtr)
-lookupSPT n | 0<=n && n<length spt = Just $ spt !! n
-            | otherwise = Nothing
+lookupSPT :: RemoteTable -> StaticName -> Maybe (SDynamic StaticPtr)
+lookupSPT (RT (SPT spt,_)) name = do Dynamic typ ptr <- M.lookup name spt
+                                     return $ SDynamic typ (StaticPtr name ptr)
 
-lookupPPT :: StaticName -> Static (Dict (Typeable a)) -> Maybe (SDynamic Static) -- Note that a :: *
-lookupPPT n ta | 0 <= n && n < length ppt
-  = case ppt !! n
-    of PolyTblEnt t f -> (\Dict -> Just $ SDynamic typeRep (PolyPtr n t ta f)) $ typeableConstraint t (deRefStatic ta)
-               | otherwise = Nothing
+lookupPPT :: RemoteTable -> StaticName -> Static (Dict (Typeable a)) -> Maybe (SDynamic Static) -- Note that a :: *
+lookupPPT (RT (_,PPT ppt)) name ta = do PolyTblEnt t f <- M.lookup name ppt
+                                        return $ (\Dict -> SDynamic typeRep (PolyPtr name t ta f)) $ typeableConstraint t (deRefStatic ta)
 
-instance Binary (SDynamic StaticPtr) where
-  put = putSDynStaticPtr
-  get = getSDynStaticPtr
-
-instance Typeable a => Binary (StaticPtr a) where
-  put = putStaticPtr
-  get = getStaticPtr typeRep
-
-instance Binary (SDynamic Static) where
-  put = putSDynStatic
-  get = getSDynStatic
-
-instance Typeable a => Binary (Static a) where
-  put = putStatic
-  get = getStatic typeRep
+-- We can't provide Binary instances, as need to differ depending on RemoteTable.
+-- We force users to provide (orphan) instances
 
 -- | Serialise a @'SDynamic' 'StaticPtr'@. See also 'decode' (default definition in terms of 'putSDynStaticPtr') from the 'Binary' instance of @'SDynamic' 'StaticPtr'@
 putSDynStaticPtr :: SDynamic StaticPtr -> Put
@@ -117,31 +134,31 @@ maybeToGet err Nothing = fail err
 maybeToGet _ (Just x) = return x
 
 -- | Deserialise a 'StaticPtr' to a 'SDynamic' value, without having to know the type.
-getSDynStaticPtr :: Get (SDynamic StaticPtr)
-getSDynStaticPtr = do name <- get
-                      maybeToGet "getSDynStaticPtr: lookup failed" $ lookupSPT name
+getSDynStaticPtr :: RemoteTable -> Get (SDynamic StaticPtr)
+getSDynStaticPtr rt = do name <- get
+                         maybeToGet "getSDynStaticPtr: lookup failed" $ lookupSPT rt name
 
 -- | Deserialise a 'StaticPtr'. See also 'encode' (default definition in terms of 'getStaticPtr') from the 'Binary' instance of 'StaticPtr'
-getStaticPtr :: TypeRep a -> Get (StaticPtr a)
-getStaticPtr t = do SDynamic ta sa <- getSDynStaticPtr
-                    maybeToGet ("getStaticPtr: dynamic typecheck failed (had "
-                                ++ show t ++ " and " ++ show ta ++ ")")
-                      $ gcastR ta t sa
+getStaticPtr :: RemoteTable -> TypeRep a -> Get (StaticPtr a)
+getStaticPtr rt t = do SDynamic ta sa <- getSDynStaticPtr rt
+                       maybeToGet ("getStaticPtr: dynamic typecheck failed (had "
+                                   ++ show t ++ " and " ++ show ta ++ ")")
+                         $ gcastR ta t sa
 
 -- | Deserialise a 'Static' to a 'SDynamic' value, without having to know the type.
-getSDynStatic :: Get (SDynamic Static)
-getSDynStatic = getWord8 >>= go
-  where go 0 = do SDynamic t p <- getSDynStaticPtr -- MonoPtr case
+getSDynStatic :: RemoteTable -> Get (SDynamic Static)
+getSDynStatic rt = getWord8 >>= go
+  where go 0 = do SDynamic t p <- getSDynStaticPtr rt -- MonoPtr case
                   return $ SDynamic t (MonoPtr p)
-        go 1 = do name <- get :: Get StaticName  -- I don't undestand why we need a type sig? -- PolyPtr case
-                  (SDynamic ttyp typ) <- getSDynStatic
+        go 1 = do name <- get :: Get StaticName  -- TODO : why need type sig? -- PolyPtr case
+                  (SDynamic ttyp typ) <- getSDynStatic rt
                   G1 ttyp' <- maybeToGet "getSDynStatic (poly case): static Dict (Typeable _) arg is not actually a Dict _"
                                        $ getR1 typeRepDict ttyp
                   G1 _ <- maybeToGet "getSDynStatic (poly case): static Dict (Typeable _) arg is not actually a Dict (Typeable _)"
                                    $ getR1 (typeRepTypeable :: TypeRep (Typeable {-:: * -> Constraint-})) ttyp'
-                  maybeToGet "getSDynStatic (poly case): lookup failed" $ lookupPPT name typ
-        go 2 = do SDynamic tf f <- getSDynStatic -- StaticApp case
-                  SDynamic tx x <- getSDynStatic
+                  maybeToGet "getSDynStatic (poly case): lookup failed" $ lookupPPT rt name typ
+        go 2 = do SDynamic tf f <- getSDynStatic rt -- StaticApp case
+                  SDynamic tx x <- getSDynStatic rt
                   G2 tsrc ttgt <- maybeToGet "getSDynStatic (app case): not a function" $ getFnR tf
                   x' <- maybeToGet "getSDynStatic (app case): function expects different type to argument given"
                         $ gcastR tx tsrc x
@@ -150,8 +167,8 @@ getSDynStatic = getWord8 >>= go
 
 
 -- | Deserialise a 'Static'. See also 'encode' (default definition in terms of 'getStatic') from the 'Binary' instance of 'Static'
-getStatic :: TypeRep a -> Get (Static a)
-getStatic t = do SDynamic ta sa <- getSDynStatic
-                 maybeToGet ("getStatic: dynamic typecheck failed (had "
-                             ++ show t ++ " and " ++ show ta ++ ")")
-                   $ gcastR ta t sa
+getStatic :: RemoteTable -> TypeRep a -> Get (Static a)
+getStatic rt t = do SDynamic ta sa <- getSDynStatic rt
+                    maybeToGet ("getStatic: dynamic typecheck failed (had "
+                                ++ show t ++ " and " ++ show ta ++ ")")
+                      $ gcastR ta t sa

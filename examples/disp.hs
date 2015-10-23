@@ -5,12 +5,6 @@ import Data.Type.Equality
 import Data.Char
 import Data.Maybe
 
-typeRepChar :: TypeRep Char
-typeRepChar = unsafeTemporaryMkTypeRep ("ghc-prim","GHC.Types","Char")
-
-instance Typeable Char where
-  typeRep = typeRepChar
-
 -- | A contrived example of using 'Typeable'.
 -- Given a @c :: Char@, return @show c@
 -- given a string, convert it to upper-case

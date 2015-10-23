@@ -18,6 +18,21 @@ tyConBool = TyCon ("ghc-prim","GHC.Types","Bool")
 tyConInt :: TyCon Int
 tyConInt = TyCon ("ghc-prim","GHC.Types","Int")
 
+tyConChar :: TyCon Char
+tyConChar = TyCon ("ghc-prim","GHC.Types","Char")
+
+tyConTuple2 :: TyCon (,)
+tyConTuple2 = TyCon ("ghc-prim","GHC.Tuple","(,)")
+
+tyConTuple3 :: TyCon (,,)
+tyConTuple3 = TyCon ("ghc-prim","GHC.Tuple","(,,)")
+
+tyConTuple4 :: TyCon (,,,)
+tyConTuple4 = TyCon ("ghc-prim","GHC.Tuple","(,,,)")
+
+tyConTuple5 :: TyCon (,,,,)
+tyConTuple5 = TyCon ("ghc-prim","GHC.Tuple","(,,,,)")
+
 tyConMaybe :: TyCon Maybe
 tyConMaybe = TyCon ("base","GHC.Base","Maybe")
 
@@ -29,6 +44,9 @@ tyConArr = TyCon ("ghc-prim","GHC.Prim","(->)")
 
 tyConList :: TyCon []
 tyConList = TyCon ("ghc-prim","GHC.Types","[]")
+
+tyConEither :: TyCon Either
+tyConEither = TyCon ("base","Data.Either","Either")
 
 tyConTypeRep :: TyCon (TypeRep :: k -> *)
 tyConTypeRep = TyCon ("typeableT","Data.TypeableT.Internals","TypeRep")

@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs , KindSignatures , ScopedTypeVariables #-}
+{-# LANGUAGE GADTs , KindSignatures , ScopedTypeVariables , FlexibleInstances , TypeFamilies#-}
 
 -- | A mockup of a simple process framework using 'Control.DistributedClosure'
 -- It only handles local threads though.
@@ -18,12 +18,82 @@ import Control.DistributedClosure
 import Control.Concurrent
 import Control.Monad.RWS
 import Data.Binary(Binary(),decode,encode)
+import qualified Data.Binary as B (put,get)
 import Data.ByteString.Lazy(ByteString)
 
 import Control.Applicative((<|>))
 import Data.Binary.Put(runPut)
 
 
+-- setup our statics
+instance Binary (SDynamic Closure) where
+    put = putSDynClosure
+    get = getSDynClosure rtable
+
+instance Typeable a => Binary (Closure a) where
+    put = putClosure
+    get = getClosure rtable typeRep
+
+rtable :: RemoteTable
+rtable = registerStaticMono "succ" (toDyn (succ :: Int -> Int))
+       $ registerStaticMono "add" (toDyn ((+) :: Int -> Int -> Int))
+       $ registerStaticMono "predBS" (toDyn (pred . decode :: ByteString -> Int))
+       $ registerStaticMono "DTInt" (toDyn (Dict :: Dict (Typeable Int)))
+       $ registerStaticMono "DBInt" (toDyn (Dict :: Dict (Binary Int)))
+       $ registerStaticMono "DTBool" (toDyn (Dict :: Dict (Typeable Bool)))
+       $ registerStaticMono "DBBool" (toDyn (Dict :: Dict (Binary Bool)))
+       $ registerStaticPoly "MaybeDT" (PolyTblEnt MaybeDTTag (\Dict -> Dict))
+       $ registerStaticPoly "MaybeDB" (PolyTblEnt MaybeDBTag (\_ Dict -> Dict))
+       $ registerStaticPoly "ListDT" (PolyTblEnt ListDTTag (\Dict -> Dict))
+       $ registerStaticPoly "ListDB" (PolyTblEnt ListDBTag (\_ Dict -> Dict))
+       $ closureRemoteTable
+
+staticSucc :: Static (Int -> Int)
+staticSucc = staticMonoPtr rtable "succ"
+
+staticAdd :: Static (Int -> Int -> Int)
+staticAdd = staticMonoPtr rtable "add"
+
+staticPredBS :: Static (ByteString -> Int)
+staticPredBS = staticMonoPtr rtable "predBS"
+
+instance Serializable Bool where
+  binDict = staticMonoPtr rtable "DBBool"
+  typDict = staticMonoPtr rtable "DTBool"
+
+instance Serializable Int where
+  binDict = staticMonoPtr rtable "DBInt"
+  typDict = staticMonoPtr rtable "DTInt"
+
+data MaybeDBTag = MaybeDBTag deriving Show
+instance Tag MaybeDBTag where
+  type PolyTag MaybeDBTag a = Dict (Binary a) -> Dict (Binary (Maybe a))
+  typeableConstraint _ Dict = Dict
+
+data MaybeDTTag = MaybeDTTag deriving Show
+instance Tag MaybeDTTag where
+  type PolyTag MaybeDTTag a = Dict (Typeable (Maybe a))
+  typeableConstraint _ Dict = Dict
+
+data ListDBTag = ListDBTag deriving Show
+instance Tag ListDBTag where
+  type PolyTag ListDBTag a = Dict (Binary a) -> Dict (Binary [a])
+  typeableConstraint _ Dict = Dict
+
+data ListDTTag = ListDTTag deriving Show
+instance Tag ListDTTag where
+  type PolyTag ListDTTag a = Dict (Typeable [a])
+  typeableConstraint _ Dict = Dict
+
+instance Serializable b => Serializable (Maybe b) where
+  binDict = staticPolyPtrAt rtable MaybeDBTag "MaybeDB" typDict `staticApp` binDict
+  typDict = staticPolyPtrAt rtable MaybeDTTag "MaybeDT" typDict
+
+instance Serializable b => Serializable [b] where
+  binDict = staticPolyPtrAt rtable ListDBTag "ListDB" typDict `staticApp` binDict
+  typDict = staticPolyPtrAt rtable ListDTTag "ListDT" typDict
+
+-- a process framework
 type ProcessId = Int
 
 type MessageQ = Chan ByteString
@@ -100,10 +170,10 @@ client srv done = do id <- getSelfId
         -- We only test Int, but it works for [Maybe Bool] etc also
         requests :: [Closure Int]
         requests = [closurePure 0
-                   ,closureApp (closureSP staticSucc) $ closurePure 0
-                   ,closureApp (closureApp (closureSP staticAdd) (closurePure 1))
-                               (closureApp (closureSP staticSucc) (closurePure 0))
-                   ,closureApp (closureSP staticPredBS) (closureEnc $ encode (4::Int))
+                   ,closureApp (closureS staticSucc) $ closurePure 0
+                   ,closureApp (closureApp (closureS staticAdd) (closurePure 1))
+                               (closureApp (closureS staticSucc) (closurePure 0))
+                   ,closureApp (closureS staticPredBS) (closureEnc $ encode (4::Int))
                    ]
 
 --Works, but only does Int & Bool, 'purifyAllListMaybeBoolInt' below does all combinations of Int, Bool, [], Maybe

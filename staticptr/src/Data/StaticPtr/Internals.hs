@@ -9,15 +9,21 @@
 {-# LANGUAGE Safe #-}
 {-# LANGUAGE GADTs , RankNTypes , ConstraintKinds , TypeFamilies #-}
 
-module Data.StaticPtr.Internals(StaticName,StaticPtr(StaticPtr),Dict(Dict),Static(MonoPtr,PolyPtr,StaticApp),Tag(PolyTag,typeableConstraint)) where
+module Data.StaticPtr.Internals(StaticName,StaticPtr(StaticPtr),StaticPtrTable(SPT),Dict(Dict),PolyTblEnt(PolyTblEnt),PolyPtrTable(PPT),Static(MonoPtr,PolyPtr,StaticApp),Tag(PolyTag,typeableConstraint)) where
 
 import Data.TypeableT(Typeable())
+import Data.DynamicT(Dynamic())
+
+import Data.Map(Map())
 
 -- | This is the name of a 'StaticPtr' - this is what gets serialised, and is a key into the SPT
-type StaticName = Int
+type StaticName = String
 
 -- | A opaque data type representing, intuitively, a static /code/ pointer to a value of type @a@
 data StaticPtr a = StaticPtr StaticName a
+
+-- | An opaque lookup table for static pointers
+newtype StaticPtrTable = SPT (Map StaticName Dynamic)
 
 -- | This gives a way to get an actual value embodying a constraint dictionary so we can pass it around explicitly
 data Dict c where
@@ -49,6 +55,13 @@ class Show t => Tag t where
   -- TODO: this could probably be encoded in the PPTEnt, by
   --     (forall b . Dict (Typeable b) -> (TypeRep (PolyTag t b), PolyTag t b))
   -- but it is quite nice to declare it on tag creation (whilst everything is manual, at least)
+
+
+data PolyTblEnt where
+  PolyTblEnt :: Tag t => t -> (forall (a :: *) . Dict (Typeable a) -> PolyTag t a) -> PolyTblEnt
+
+-- | An opaque lookup table for polymorphic static pointers
+newtype PolyPtrTable = PPT (Map StaticName PolyTblEnt)
 
 
 -- Haddock note: PolyPtr not exported from StaticPtr module, so this remark will be true from the user's viewpoint

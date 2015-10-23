@@ -27,6 +27,21 @@ typeRepBool = TRCon tyConBool
 typeRepInt :: TypeRep Int
 typeRepInt = TRCon tyConInt
 
+typeRepChar :: TypeRep Char
+typeRepChar = TRCon tyConChar
+
+typeRepTuple2 :: TypeRep (,)
+typeRepTuple2 = TRCon tyConTuple2
+
+typeRepTuple3 :: TypeRep (,,)
+typeRepTuple3 = TRCon tyConTuple3
+
+typeRepTuple4 :: TypeRep (,,,)
+typeRepTuple4 = TRCon tyConTuple4
+
+typeRepTuple5 :: TypeRep (,,,,)
+typeRepTuple5 = TRCon tyConTuple5
+
 typeRepMaybe :: TypeRep Maybe
 typeRepMaybe = TRCon tyConMaybe
 
@@ -39,6 +54,9 @@ typeRepArr = TRCon tyConArr
 typeRepList :: TypeRep []
 typeRepList = TRCon tyConList
 
+typeRepEither :: TypeRep Either
+typeRepEither = TRCon tyConEither
+
 typeRepTypeRep :: TypeRep TypeRep
 typeRepTypeRep = TRCon tyConTypeRep
 
@@ -46,6 +64,16 @@ instance Typeable Bool where
   typeRep = typeRepBool
 instance Typeable Int where
   typeRep = typeRepInt
+instance Typeable Char where
+  typeRep = typeRepChar
+instance Typeable (,) where
+  typeRep = typeRepTuple2
+instance Typeable (,,) where
+  typeRep = typeRepTuple3
+instance Typeable (,,,) where
+  typeRep = typeRepTuple4
+instance Typeable (,,,,) where
+  typeRep = typeRepTuple5
 instance Typeable Maybe where
   typeRep = typeRepMaybe
 instance Typeable () where
@@ -54,5 +82,7 @@ instance Typeable (->) where
   typeRep = typeRepArr
 instance Typeable [] where
   typeRep = typeRepList
+instance Typeable Either where
+  typeRep = typeRepEither
 instance Typeable TypeRep where
   typeRep = typeRepTypeRep
