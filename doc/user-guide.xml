@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE book PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN" "http://docbook.org/xml/4.2/docbookx.dtd">
+
+<book id="user-guide">
+  <bookinfo>
+    <date>2015-08-12</date>
+    <title>Type-indexed Type Representations User Guide</title>
+    <author>
+      <firstname>Ben</firstname>
+      <surname>Price</surname>
+      <address><email>t-bepric@microsoft.com</email></address>
+    </author>
+  </bookinfo>
+
+  <toc></toc>
+
+  <chapter id="intro">
+    <title>Introduction</title>
+    <para>
+      The package <literal>typeableT</literal> is a redesign of the <literal>Data.Typeable</literal> module, where the major change is that the type representations are <emphasis>type-indexed</emphasis>.
+      This means that <literal>typeOf False :: TypeRep Bool</literal>, rather than just <literal>TypeRep</literal>.
+    </para>
+
+    <para>
+      The package <literal>dynamicT</literal> is a modification of <literal>Data.Dynamic</literal> to use type-indexed <literal>TypeRep</literal>s internally.
+      This allows us to avoid lying to the typechecker by using <literal>Any</literal> as the actual type of something stored in a <literal>Dynamic</literal>, and improve type safety by avoiding any <literal>unsafeCoerce</literal>s.
+      This, hopefully, should be a straightforward drop-in replacement of the current <literal>Data.Dynamic</literal> in <literal>base</literal> (at least when GHC can automatically derive <literal>TypeRep</literal>s, as it does with old-style <literal>TypeRep</literal>s currently).
+    </para>
+
+    <para>
+      The package <literal>staticptr</literal> is a mock-up of what GHC will hopefully support with the <literal>static</literal> keyword sometime in the future.
+      This is a change from the status quo (in <literal>GHC.StaticPtr</literal>) by storing type representations in the static pointer table and doing <emphasis>dynamic</emphasis> typechecks where appropriate to guarantee type safety.
+    </para>
+
+    <para>
+      Finally, the package <literal>distributed-closure</literal> is like <literal>distributed-static</literal>, with a restricted form of polymorphism, which is type safe (in the sense that we can avoid <literal>unsafeCoerce</literal>).
+    </para>
+  </chapter>
+
+  <chapter>
+    <title>Naming Conventions</title>
+    <para>
+      There are often two varients of functions which need access to type representations, one explictly taking a <literal>TypeRep</literal>, and one taking a <literal>Typeable</literal> class constraint.
+      We name the one with a class constraint without any suffix, and add a <literal>R</literal> suffix to the explicit one (i.e. <literal>toDyn</literal> and <literal>toDynR</literal>).
+      Note that the class constraint version doesnt make much sense on the <literal>TypeRep</literal>-manipulating functions in the <literal>typeableT</literal> module, but we still follow the suffix scheme there, for consistency.
+    </para>
+  </chapter>
+  <chapter>
+    <title>Static Pointers</title>
+    <para>
+      For details of the "restricted polymorphism" supported, see the documentation of <literal>Static</literal> in the <literal>staticptr</literal> API docs.
+      Using the polymorphism support can be fairly expensive, as to serialise a (monomorphic) static pointer, one must only send its "name" (in this implementation, an <literal>Int</literal> as an index into the table).
+      However, with a polymorphic pointer, one must send both its name and a description of its static type argument, which may itself be a deeply nested combination of static applications and more polymorphism.
+      Thus it is more efficient to declare commonly used static values monomorphically if possible.
+      This is more pronounced when using closures, as <literal>closurePure</literal> uses polymorphic pointers "under the hood".
+      For an example, see the distributed-closure section of this guide.
+    </para>
+  </chapter>
+
+  <chapter>
+    <title>Distributed Closures</title>
+    <para>
+      Note that we use a "dual representation" of closures, as suggested in "Implementing a High-level Distributed-Memory Parallel Haskell in Haskell" (P. Maier and P. Trinder).
+      This avoids unnecessary serialisation of closures when manipulating them locally, for efficient computation when closures are not transported across the network (or to another thread).
+      (The basic idea is to store the actual value as well as the "synatax tree" representation of the closure.)
+    </para>
+    <para>
+      Notice that <literal>closurePure</literal> can be inefficient, in the sense that it will expand in to a lot of data to send across the network.
+      This is because, it serialises a static decoder (actually, a dictionary for the <literal>Binary</literal> class) for the required type, as well as the value.
+      This static decoder is built automatically by the <literal>Serializable</literal> class, but this machinery heavilly relies upon the polymorphism support of static pointers.
+      For example, at the time of writing, <literal>closurePure $ Just [Just False,Nothing]</literal> serialises as 162 bytes, of which only 12 are the data.
+      (These numbers may fluctuate slightly with implementation changes, but the general problem is unavoidable.)
+      However, it is possible to avoid using <literal>closurePure</literal> is some situations, for example, instead of <literal>f x = (closureS $ static not) `closureApp` (closurePure x)</literal>, one could write <literal>f x = (closureS $ static (not . (decode :: ByteString -> Bool))) `closureApp` (closureEnc $ encode x)</literal>.
+      Of course, these examples assume that GHC supports the <literal>static</literal> keyword in the form we require (currently, there is no polymorphism support, and the (monomorphic) static pointer table doesn't contain type representations).
+    </para>
+  </chapter>
+</book>

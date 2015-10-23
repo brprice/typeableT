@@ -1,0 +1,26 @@
+name: typeableT
+version: 0.0.1
+synopsis: Type-indexed type representations
+description: Like Data.Typeable, but TypeReps are indexed by the type they represent.
+homepage: https://github.com/brprice/typeableT
+license: BSD3
+license-file: LICENSE
+author: Ben Price
+maintainer: Ben Price <bjmprice@gmail.com>
+category: Data
+build-type: Simple
+cabal-version: >=1.2
+
+library
+-- base 4.7.0.0 introduced Data.Type.Equality
+  build-depends: base >= 4.7.0.0 && < 5
+  ghc-options: -Wall -fwarn-tabs
+  exposed-modules: Data.TypeableT
+                   Data.TypeableT.Typeable710
+                   Data.TypeableT.WithTypeRep
+  other-modules: Data.TyConT.Internals
+                 Data.TyConT
+                 Data.TyConT.Inst
+                 Data.TypeableT.Internals
+                 Data.TypeableT.Inst
+  hs-source-dirs: src

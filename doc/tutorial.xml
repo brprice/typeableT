@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE book PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN" "http://docbook.org/xml/4.2/docbookx.dtd">
+
+<book id="tutorial">
+  <bookinfo>
+    <date>2015-08-12</date>
+    <title>Type-indexed Type Representations Tutorial</title>
+    <author>
+      <firstname>Ben</firstname>
+      <surname>Price</surname>
+      <address><email>t-bepric@microsoft.com</email></address>
+    </author>
+  </bookinfo>
+
+  <toc></toc>
+
+  <chapter id="typeableT">
+    <title><literal>Data.TypeableT</literal></title>
+    <para>
+      One may use <literal>TypeRep</literal>s when a runtime representation of a type is needed.
+      This can be useful, for example, under an existential quantifier in a GADT, for instance we have
+      <programlisting>
+data Dynamic where
+  Dynamic :: TypeRep a -> a -> Dynamic
+      </programlisting>
+      where we can then unpack and inspect the first argument at runtime to retrieve information about <literal>a</literal>.
+      This can be done with <literal>eqRRHom</literal> for exact comparisons, or one of the <literal>get*R</literal> functions for decomposition.
+    </para>
+
+    <para>
+      The class <literal>Typeable</literal> is inhabited by every type <literal>T</literal> such that there is an inhabitant of <literal>TypeRep T</literal>.
+      Note that <literal>TypeRep T</literal> is a singleton type.
+      Currently, GHC does not have support for deriving <literal>Typeable</literal>, so the burden of ensuring the previous remarks are true is on the user of this library.
+      As GHC cannot yet create <literal>TypeRep</literal>s automatically, there is an "escape hatch" <literal>unsafeTemporaryMkTypeRep</literal>.
+      As its name suggests, this can be <emphasis>unsafe</emphasis>, if the string you supply is not unique to that type constructor.
+      As its name also suggests, it will be removed when GHC gains the requisite support.
+      As an example, to make a new type <literal>T</literal> and make it <literal>Typeable</literal>, one could do
+      <programlisting>
+data T = TI Int | TB Bool
+instance Typeable T where
+  typeRep = unsafeTemporaryMkTypeRep ("MyPackage","MyModule","T")
+      </programlisting>
+    </para>
+
+    <para>
+      As an example of equality and decomposition, consider displaying any character as itself, any string in uppercase, and anything else as <literal>"unknown"</literal>:
+      <programlisting>
+disp :: Typeable a => a -> String
+disp a = head $ catMaybes [dispChar a, dispString a , Just "unknown"]
+  where dispChar :: Typeable a => a -> Maybe String
+        dispChar a = do c &lt;- cast a :: Maybe Char
+                        return $ show c
+        dispString :: Typeable a => a -> Maybe String
+        dispString a = do G1 ta' &lt;- getR1 typeRepList $ typeOf a
+                          Refl &lt;- eqRRHom typeRepChar ta'
+            -- Pattern matching on Refl brings (a ~ [Char]) into scope
+                          return $ map toUpper a
+      </programlisting>
+      There is flexibility in <literal>dispString</literal>, one could write it like <literal>dispChar</literal>, with a <literal>cast</literal>, but we write this longer version to show an example of decompositing type representations, and pattern matching on <literal>Refl</literal>.
+    </para>
+  </chapter>
+
+  <chapter id="dynamicT">
+    <title><literal>Data.DynamicT</literal></title>
+    <para>
+      <literal>Dynamic</literal> can box any monomorphic value into a uniform type that can be unpacked in a type safe way.
+      As an example
+      <programlisting>
+df :: Dynamic
+df = toDyn False
+
+ex1 :: Maybe Int
+ex1 = fromDynamicR typeRepInt df
+-- Nothing
+
+ex2 :: Maybe Bool
+ex2 = fromDynamicR typeRepBool df
+-- Just False
+
+ex3 :: Maybe Bool
+ex3 = dynApply (toDyn not) df >>= fromDynamicR typeRep
+-- Just True
+      </programlisting>
+      Note that in <literal>ex3</literal>, the <literal>typeRepT</literal> is a class function which is inferred to have type <literal>TypeRep Bool</literal>.
+      This flexibility makes programmes easier to write, but if one is not careful, difficult to understand!
+      Note that you can always pattern match on the constructor if you need more power.
+      For example, you can reverse any dynamic list, and leave others alone.
+      <programlisting>
+f :: Dynamic -> Dynamic
+f (Dynamic t x) = case getR1 typeRepList t
+                    of Just (G1 _) -> Dynamic t $ reverse x
+                       Nothing -> Dynamic t x
+      </programlisting>
+    </para>
+
+    <para>
+      The <literal>SDynamic S</literal> type is analogous to <literal>Dynamic</literal>, except it contains a representation of a type <literal>T</literal>, and a value of type <literal>S T</literal>.
+      Notice that <literal>S</literal> need not be <literal>Typeable</literal>!
+    </para>
+  </chapter>
+
+  <chapter id="staticptr">
+    <title><literal>Data.StaticPtr</literal></title>
+    <para>
+      A <literal>StaticPtr</literal> is (conceptually) a pointer to a code address, whereas a <literal>Static</literal> represents both static functions applied to static values and a restricted form of polymorphic static functions.
+      (For details of "restricted", see the haddock documentation of this module.)
+      This means that they can be serialised and sent over the network easily (to another process with the same static pointer tables)!
+      Static values are really just a stepping stone to distributed closures, which are similar, but can capture only-known-at-runtime values, and thus (fairly) arbitrary computations and still be passed over the network.
+      Nevertheless, we describe static values in some detail, as most of the explanation transfers directly to closures.
+      Currently, all static values must be defined within the library, in <literal>SPT.hs</literal>, until GHC obtains "magic" support.
+    </para>
+
+    <para>
+      An example of defining new statics:
+      <programlisting>
+-- We add staticNot and sReverse to the export list
+
+staticNot :: StaticPtr (Bool -> Bool)
+staticNot = StaticPtr 0 not
+
+spt :: [Dyn StaticPtr]
+spt = [toDyn staticNot]
+
+
+data RevTag = RevTag deriving Show
+
+instance Tag RevTag where
+  type PolyTag RevTag a = [a] -> [a]
+  typeableConstraint _ Dict = Dict
+
+sReverse :: Static (Dict (Typeable (a :: *))) -> Static (PolyTag RevTag a)
+sReverse ta = PolyPtr 0 RevTag ta (\_ -> reverse)
+
+-- eReverse could be inlined into ppt, if desired (it should not be exported)
+eReverse :: PolyTblEnt
+eReverse = PolyTblEnt RevTag (\_ -> reverse)
+
+ppt :: [PolyTblEnt]
+ppt = [eReverse]
+      </programlisting>
+      The most important thing to note is that the index (first argument) to <literal>StaticPtr</literal> or <literal>PolyPtr</literal> <emphasis>must</emphasis> match the relevent index into the relevent table (<literal>spt</literal> or <literal>ppt</literal>).
+      A monomorphic static is fairly straightforward: just wrap the value in a <literal>StaticPtr</literal>, (and add an index), export that pointer, and add a row in the <literal>spt</literal> using <literal>toDyn</literal>.
+      A polymorphic static is a bit more fiddly: firstly a "tag" must be created (or reused, if a suitable one exists, e.g. <literal>RevTag</literal> could be used for <literal>tail</literal>), which has the sole purpose of being used in the type level function provided by <literal>PolyTag</literal>.
+      Then this tag must be made an instance of <literal>Tag</literal>, where the type family should return the type of your polymorphic function (above: <literal>[a] -> [a]</literal>).
+      <literal>typeableConstraint</literal> can generally be be written as above, its purpose is to ensure that <literal>PolyTag t a</literal> is an instance of <literal>Typeable</literal>, which is generally derivable once GHC knows the what the type function does on the new tag.
+      Then you can create (and export) the analogous thing to <literal>sReverse</literal>, making sure you use a fresh index, update the tag and the function.
+      (The argument to the lambda is a <literal>Dict (Typeable a)</literal>, and it must return a <literal>PolyTag t a</literal>.
+      This argument can be useful if you need a static function to wrap a <literal>Maybe</literal> around a <literal>TypeRep</literal> for instance.
+      Finally, insert a row into the correct place in the <literal>ppt</literal> with the correct tag and the same lambda as before.
+    </para>
+
+    <para>
+      Now that we've seen how to create static values, how can we use them?
+      The primary use of static values is their serialisation, which is achieved by their <literal>Binary</literal> instances, meaning that <literal>encode</literal> and <literal>decode</literal> will work.
+      <programlisting>
+-- Assuming staticNot and staticTrue have the obvious meanings
+saFalse :: Static Bool
+saFalse = StaticApp (staticMono staticNot) (staticMono staticTrue)
+
+test = False == deRefStatic (decode $ encode saFalse)
+
+-- Exceptions will be thrown on a type mismatch, e.g.:
+fails :: StaticPtr Bool
+fails  = decode $ encode staticNot
+
+-- A use of polymorphism:
+-- Assuming staticDTInt :: StaticPtr (Dict (Typeable Int))
+-- and sListDT :: StaticPtr (Dict (Typeable a) -> Dict (Typeable [a]))
+
+sRevInt :: Static ([Int] -> [Int])
+sRevInt = sReverse $ staticMono staticDTInt
+
+sRevListInt :: Static ([[Int]] -> [[Int]])
+sRevListInt = sReverse $ sListDT (staticMono staticDTInt)
+
+-- then we can encode, pass over the network, decode, dereference and use:
+testInt = [3::Int,2,1] == (deRefStatic $ decode $ encode sRevInt) [1,2,3::Int]
+
+testListInt = [[3::Int,2],[1]] == (deRefStatic $ decode $ encode sRevListInt) [[1],[3::Int,2]]
+      </programlisting>
+      As you can see, using a combination of polymorphism and static applications, one can build up expressions of many different computations that a remote process can be asked to execute, only assuming that the processes have the same static pointer tables.
+      However, this is limited to computations that could be carried out at compile time, as everything is static.
+      Unless, that is, you and the remote process expect that you send a <literal>Static (Int -> Int)</literal> and then a <literal>ByteString</literal> encoding an <literal>Int</literal>, and then the remote decodes and dereferences the function, applies it to the argument, then returns a <literal>ByteString</literal> of the result to you.
+      This is the problem that <literal>distributed-closure</literal> solves.
+      The benefit of having this form of polymorphism over defining a different static reverse for each type you are interested in is that you don't necessarilly know what types you want until runtime.
+      This is more obvious when you have closures and can send runtime values: imagine a server which your client wishes to send a computation to reverse some data.
+      If all static reversing functions were declared at compile time, we would be limited with what data we could get reversed.
+      With polymorphism however, we can get arbitrarily deeply nested types reversed.
+      However, this does come with a cost of sending more data over the network to describe the static computation - see the User's Guide for more details.
+    </para>
+  </chapter>
+
+  <chapter id="distributed-closure">
+    <title><literal>Control.DistributedClosure</literal></title>
+    <para>
+      Use of distributed closures is almost exactly the same as statics, the differences being an extra layer of wrapping in closure "smart constructors", and access to <literal>closurePure</literal>, which can turn any value into a closure (as long as it is a member of the <literal>Serializable</literal> class).
+      However, see the User's Guide for details of an efficiency pitfall of <literal>closurePure</literal>.
+    </para>
+  </chapter>
+</book>

@@ -1,0 +1,23 @@
+name: distributed-closure
+version: 0.0.1
+synopsis: Support for distributed closures a la Cloud Haskell, built on typeableT et al
+description: Like (part of) distributed-static, but without rank 1 polymorphism support, avoiding the need to embed our own typechecker.
+homepage: https://github.com/brprice/typeableT
+license: BSD3
+license-file: LICENSE
+author: Ben Price
+maintainer: Ben Price <bjmprice@gmail.com>
+category: Control
+build-type: Simple
+cabal-version: >=1.2
+
+library
+  build-depends: base >= 4.4 && < 5,
+                 binary >= 0.7.1 && < 0.8,
+                 bytestring  >= 0.10.0 && < 0.11,
+                 typeableT >= 0.0 && < 0.1,
+                 dynamicT >= 0.0 && < 0.1,
+                 staticptr >= 0.0 && < 0.1
+  ghc-options: -Wall -fwarn-tabs
+  exposed-modules: Control.DistributedClosure
+  hs-source-dirs: src

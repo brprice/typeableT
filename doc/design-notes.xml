@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE book PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN" "http://docbook.org/xml/4.2/docbookx.dtd">
+
+<book id="design-notes">
+  <bookinfo>
+    <date>2015-08-12</date>
+    <title>Type-indexed Type Representations Design Notes</title>
+    <author>
+      <firstname>Ben</firstname>
+      <surname>Price</surname>
+      <address><email>t-bepric@microsoft.com</email></address>
+    </author>
+  </bookinfo>
+
+  <toc></toc>
+
+  <chapter id="general">
+    <title>General Notes</title>
+    <para>
+      Very little thought has been given to backwards compatibility in any sense.
+      (e.g., should a old-style <literal>TypeRep</literal> be defined in terms of the new <literal>TypeRep</literal> etc.)
+      I have not thought about a consistent naming scheme.
+      Both these points should be addressed at some point.
+      I have treated this code as proof-of-concept rather than production quality, and have made some design choices that favour development time and simplicity.
+      I point these out below.
+    </para>
+  </chapter>
+
+  <chapter id="typeableT">
+    <title>Data.TypeableT</title>
+    <para>
+      When GHC can derive them automatically, it would be worthing adding more information, perhaps a hash of the source code, so the fingerprint changes even if the package version doesn't.
+      For example, a user may write their own data type, and serialise it to disk, also writing the fingerprint of the type; then if they change the data declaration, and try to read the serialised data, one would expect to detect the mismatch via the fingerprints.
+      However, this may not happen, if it is not in a package, as the package,module,name triple may just be <literal>("main","Main","T")</literal>.
+    </para>
+    <para>
+      Caching the fingerprint hash in the <literal>TypeRep</literal> data type, and maybe using it for comparisons may be a good idea.
+    </para>
+  </chapter>
+
+  <chapter id="dynamicT">
+    <title>Data.DynamicT</title>
+    <para>
+      This module is supposed to be backwards-compatible with <literal>Data.Dynamic</literal> from <literal>base</literal> (modulo a different ambient <literal>Typeable</literal>, which is only (in <literal>base</literal>) used as a class constraint).
+      However, there is also <literal>dynTypeRep :: Dynamic -> TypeRep</literal>, which currently is not implemented, as we allow pattern-matching to extract this locally, and we can't provide such a function for type-indexed type representations, as the index is existentially bound within the dynamic value.
+      We also don't provide <literal>dynApp :: Dynamic -> Dynamic -> Dynamic</literal>, as it may call <literal>error</literal>, and that is not to my (personal) tastes.
+    </para>
+    <para>
+      A function <literal>sDynApply :: (forall a b. c (a -> b) -> c a -> c b) -> SDynamic c -> SDynamic c -> Maybe (SDynamic c)</literal> or similar may be useful and cut down on repetition in <literal>getSDynStatic</literal> and <literal>getSDynClosure</literal>.
+      However this may reduce how informative the error messages can be.
+    </para>
+    <para>
+      Perhaps changing <literal>Maybe</literal> to something more informative would be a good idea.
+      (If this is done, then converting <literal>dynApply</literal> to the new scheme and putting in error messages would be good.
+      Currently two errors: "first arg is not a function" and "function expects different type to arg given" are conflated.)
+      However, this would be an API change form what currently is in <literal>base</literal>.
+    </para>
+  </chapter>
+
+  <chapter id="staticptr">
+    <title>Data.StaticPtr</title>
+    <para>
+      <literal>Dict</literal> should probably be split into its own library.
+    </para>
+    <para>
+      The "polymorphism" support is a bit of a kludge.
+      I was avoiding the path of <literal>rank1dynamic</literal> (i.e. casting to <literal>Any</literal> and implementing my own typechecker), as I wanted to avoid any uses of <literal>unsafeCoerce</literal>.
+    </para>
+    <para>
+      As mentioned in the code, there is a fair bit of duplication of code in defining <literal>PolyPtr</literal>s and their table entries.
+      I have not tried to reduce this, as this code should all be compiler-generated anyway.
+    </para>
+    <para>
+      Depending on uptake of the library and timescale for full GHC support, it may be worthwhile letting users manually define their own static pointer tables, perhaps with Template Haskell support, in the vein of <literal>distributed-static</literal>.
+    </para>
+    <para>
+      It looks as if I don't need the tag argument to the <literal>PolyPtr</literal> constructor.
+      However, we run into injectivity issues without it.
+    </para>
+    <para>
+      Static names could be modified to "package_name-version-symbol_name" or similar to ensure differing binaries refer to the same static pointers.
+    </para>
+    <para>
+      Interestingly, note that we may like to have <literal>instance (forall a. Binary (s a)) => Binary (SDynamic s)</literal>, but GHC doesn't support that.
+      However, we know <literal>forall a. Binary (StaticPtr a)</literal>, so we can support it for the case of <literal>StaticPtr</literal> (and <literal>Static</literal>).
+    </para>
+  </chapter>
+</book>
